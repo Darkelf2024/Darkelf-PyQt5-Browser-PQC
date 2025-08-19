@@ -52,7 +52,6 @@
 # This software is published under the GPL v3.0 license and was authored by
 # Dr. Kevin Moore in 2025.
 
-
 import sys
 import random
 import os
@@ -85,6 +84,7 @@ import struct
 import zlib
 import nacl.public
 import ctypes.util
+import phonenumbers
 from nacl.public import PrivateKey, PublicKey
 from nacl.exceptions import CryptoError
 from typing import Optional, List, Dict
@@ -120,6 +120,21 @@ import mimetypes
 import tempfile
 import psutil
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
+from rich.rule import Rule
+from rich.align import Align
+from rich.table import Table
+from collections import defaultdict
+from rich.layout import Layout
+from rich import box
+from textwrap import wrap
+from getpass import getpass
+from rich.prompt import Prompt
+from collections import deque
+console = Console()
+
 # Tor + Stem
 import stem.process
 from stem.connection import authenticate_cookie
@@ -135,7 +150,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QPushButton, QLineEdit, QVBoxLayout,
     QMenuBar, QToolBar, QDialog, QMessageBox, QFileDialog, QProgressDialog, QTextEdit,
-    QListWidget, QMenu, QWidget, QLabel, QShortcut, QAction, QActionGroup, QSizePolicy, QToolButton, QHBoxLayout
+    QListWidget, QMenu, QWidget, QLabel, QShortcut, QAction, QActionGroup, QSizePolicy, QToolButton, QHBoxLayout, QFrame, QGraphicsDropShadowEffect
 )
 from PyQt5.QtGui import QPalette, QColor, QKeySequence, QGuiApplication, QIcon, QPainter, QPixmap
 from PyQt5.QtWebChannel import QWebChannel
@@ -212,6 +227,40 @@ def apply_darkelf_menu_theme():
         }}
     """)
     
+def apply_darkelf_qss():
+    darkelf_qss = """
+        QMenu {
+            background-color: #111111;
+            color: #00ff99;
+            border: 1px solid #00ff99;
+        }
+        QMenu::item:selected {
+            background-color: #00ff99;
+            color: #111111;
+        }
+        QLineEdit {
+            background-color: #000000;
+            color: #00ff99;
+            border: 1px solid #00ff99;
+            padding: 5px;
+        }
+        QPushButton {
+            background-color: #00ff99;
+            color: #000000;
+            border-radius: 4px;
+            padding: 5px 10px;
+        }
+        QPushButton:hover {
+            background-color: #00cc77;
+        }
+        QTextEdit {
+            background-color: #000000;
+            color: #00ff99;
+            border: 1px solid #00ff99;
+        }
+    """
+    QApplication.instance().setStyleSheet(darkelf_qss)
+    
 class SignalWrapper(QObject):
     osint_result_signal = pyqtSignal(object)
     
@@ -243,119 +292,360 @@ class EmailIntelPro:
         except Exception as e:
             print(f"Initialization failed: {e}")
 
+# =========================
+# DarkelfAi (local/offline)
+# =========================
+class DarkelfAi:
+    def __init__(self, model_name="mistral", ctx_size=1024):
+        self.console = Console()
+        self.memory = defaultdict(set)
+        self.case_context = ""
+        self.dialogue = deque(maxlen=10)
+
+        self.model_name = model_name
+        # ⛔ Lazy start on first call
+        self.llm_available = False
+
+        self.system_prompt = (
+            """You are Darkelf, a local cyber-OSINT assistant. You:
+- Detect and correlate emails, hashes, IPs, usernames, names, orgs
+- Reason about suspicious activity
+- Run local searches and suggest follow-up steps
+- Never leak data externally; you are fully offline and secure
+When asked to summarize, provide concise, high-signal analysis with clear recommendations."""
+        )
+
+        # Lightweight flags/context
+        self.stealth_mode = False
+        self.case_id = None
+        self.last_osint_results = []  # list[(title, url, snippet)]
+
+    # ---------- QoL helpers ----------
+    def banner(self):
+        self.console.print(
+            f"[bold green]ＤＡＲＫＥＬＦ — OSINT AI[/bold green] "
+            f"[dim]| Model: {self.model_name} "
+            f"| Stealth: {'ON' if self.stealth_mode else 'OFF'} "
+            f"| Case: {self.case_id or 'None'}[/dim]\n"
+        )
+
+    def tag_query(self, query: str) -> str:
+        if "@" in query and re.search(r"\.[A-Za-z]{2,}", query):
+            return "Email"
+        if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", query or ""):
+            return "IP Address"
+        if re.fullmatch(r"\+?\d[\d\s().-]{7,}", query or ""):
+            return "Phone"
+        if re.fullmatch(r"[A-Fa-f0-9]{32,64}", query or ""):
+            return "Hash"
+        if re.fullmatch(r"[A-Za-z0-9._-]+\.[A-Za-z]{2,}", query or ""):
+            return "Domain"
+        return "Username or Keyword"
+
+    def get_stats(self):
+        self.console.print("[bold cyan]🔢 Current Indicator Totals:[/bold cyan]")
+        if not self.memory:
+            self.console.print("  (no indicators yet)")
+            return
+        for label in sorted(self.memory.keys()):
+            self.console.print(f"  {label}: {len(self.memory[label])}")
+
+    def show_history(self, max_items=10):
+        self.console.print("[bold green]🧾 Dialogue History:[/bold green]")
+        if not self.dialogue:
+            self.console.print("  (empty)")
+            return
+        for i, (q, a) in enumerate(list(self.dialogue)[-max_items:], 1):
+            snippet = (a[:160] + "…") if len(a) > 160 else a
+            self.console.print(f"{i}. Q: {q}\n   A: {snippet}\n")
+
+    def export_csv(self, filename="osint_results.csv"):
+        if not self.last_osint_results:
+            self.console.print("[red]No results to export.[/red]")
+            return
+        with open(filename, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Title", "URL", "Snippet"])
+            for title, href, snippet in self.last_osint_results:
+                writer.writerow([title, href, snippet])
+        self.console.print(f"[cyan]📤 OSINT results saved to {filename}[/cyan]")
+
+    def toggle_stealth(self):
+        self.stealth_mode = not self.stealth_mode
+        self.console.print(f"[yellow]🕵️ Stealth mode: {'ON' if self.stealth_mode else 'OFF'}[/yellow]")
+
+    def set_case(self, name: str):
+        self.case_id = name.strip() or None
+        self.console.print(f"[blue]🗂️ Case set to: {self.case_id or 'None'}[/blue]")
+
+    # ---------- Enrichment stubs (optional, same as your draft) ----------
+    def enrich(self, wayback_limit=3, crtsh_limit=100, wikidata_limit=2):
+        # You can wire these helpers (wayback_summary, crtsh_subdomains, wikidata_search) later
+        pass
+
+    # ---------- LLM (lazy start) ----------
+    def _start_ollama_server(self):
+        try:
+            subprocess.Popen(
+                ["ollama", "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            time.sleep(3)
+            return True
+        except Exception as e:
+            self.console.print(f"[red]❌ Failed to start ollama server: {e}[/red]")
+            return False
+
+    def _ensure_llm(self):
+        if self.llm_available:
+            return True
+        self.llm_available = self._start_ollama_server()
+        return self.llm_available
+
+    def _call_ollama(self, prompt):
+        try:
+            result = subprocess.run(
+                ["ollama", "run", self.model_name],
+                input=prompt.encode(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL
+            )
+            output = result.stdout.decode(errors="ignore")
+            return output.strip()
+        except Exception as e:
+            return f"[LLM ERROR] {e}"
+
+    # ---------- Indicator extraction ----------
+    @staticmethod
+    def _extract_phones_valid(text, region="US"):
+        out = set()
+        for m in phonenumbers.PhoneNumberMatcher(text, region):
+            if phonenumbers.is_valid_number(m.number):
+                out.add(phonenumbers.format_number(m.number, phonenumbers.PhoneNumberFormat.E164))
+        return out
+
+    @staticmethod
+    def extract_indicators(text):
+        return {
+            "emails": set(re.findall(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)),
+            "usernames": set(re.findall(r"@([\w\-_]{3,32})", text)),
+            "hashes": set(re.findall(r"\b[a-fA-F0-9]{32,64}\b", text)),
+            "ips": set(re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text)),
+            "domains": set(re.findall(r"\b[a-zA-Z0-9-]+\.(com|net|org|io|xyz|ru|cn|gov|edu)\b", text)),
+            "phones": DarkelfAi._extract_phones_valid(text, "US"),
+        }
+
+    def ingest_text(self, text):
+        indicators = self.extract_indicators(text)
+        extracted_count = sum(len(v) for v in indicators.values())
+        for label, values in indicators.items():
+            self.memory[label.upper()].update(values)
+        case_prefix = f"[CASE:{self.case_id}] " if self.case_id else ""
+        self.case_context += f"\n{case_prefix}{text}"
+        if extracted_count > 0:
+            summary = ", ".join([f"{label}:{len(vals)}" for label, vals in indicators.items() if vals])
+            self.console.print(f"[green]🧠 Ingested {len(text)} chars, extracted {extracted_count} indicators ({summary}).[/green]")
+
+    def ingest_indicators(self, indicators):
+        for label, values in indicators.items():
+            if isinstance(values, (list, set)):
+                self.memory[label.upper()].update(values)
+
+    def summarize_memory(self, max_items=5):
+        lines = []
+        for label, values in self.memory.items():
+            sorted_values = sorted(values)
+            if sorted_values:
+                lines.append(
+                    f"{label}: {', '.join(sorted_values[:max_items])}" +
+                    (" ..." if len(sorted_values) > max_items else "")
+                )
+        return "\n".join(lines) if lines else "(No memory yet)"
+
+    # ---------- Prompting ----------
+    def _build_prompt(self, question, max_titles=5):
+        memory = self.summarize_memory()
+        osint_section = ""
+        items = self.last_osint_results[-max_titles:] if self.last_osint_results else []
+        if items:
+            osint_section = "\n".join(
+                f"- {title}\n  Link: {href}\n  Snippet: {snippet}"
+                for title, href, snippet in items
+            )
+        return (
+            f"{self.system_prompt}\n\n"
+            f"Recent OSINT Results:\n{osint_section}\n\n"
+            f"Indicators:\n{memory}\n\n"
+            f"Q: {question}\nA:"
+        )
+
+    def respond(self, question) -> str:
+        """Like ask(), but returns a string instead of printing."""
+        if not self._ensure_llm():
+            return "LLM unavailable"
+        prompt = self._build_prompt(question)
+        answer = self._call_ollama(prompt)
+        self.dialogue.append((question, (answer or "").strip()))
+        return answer or ""
+
+    # CLI helpers (optional to keep)
+    def _suggest_followups(self, answer):
+        self.console.print("[blue]Shortcut prompts: 'summary', 'analysis', 'suggestions', 'next steps'[/blue]")
+
 class DarkelfUtils:
+    # DuckDuckGo onion endpoints
     DUCKDUCKGO_LITE = "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/lite"
     DUCKDUCKGO_HTML = "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/html"
+
+    # Default Tor proxy (we will auto-detect/override at runtime)
     TOR_PROXY = {
         "http": "socks5h://127.0.0.1:9052",
         "https": "socks5h://127.0.0.1:9052"
     }
+
     DORK_THREADS = 2
     FETCH_THREADS = 2
 
-    def __init__(self):
-        pass
+    def __init__(self, ai_model="mistral"):
+        # Attach the AI so Utils can summarize/analyze results immediately
+        self.ai = DarkelfAi(model_name=ai_model)
+        # simple console for optional logs (you can remove if not using rich here)
+        self.console = Console()
 
-    def generate_duckduckgo_dorks(self, query):
+    # Dork generation (kept, with de-dup)
+    def generate_duckduckgo_dorks(self, query: str):
+        q = query.strip()
         dorks = []
-        if "@" in query:
-            dorks += [
-                f'"{query}" site:pastebin.com',
-                f'"{query}" site:github.com',
-                f'"{query}" filetype:txt',
-                f'"{query}" site:linkedin.com/in',
-                f'"{query}" site:facebook.com',
-                f'"{query}" intitle:index.of',
-                f'"{query}" ext:log OR ext:txt',
-                f'"{query}" site:medium.com',
-                f'"{query}" site:archive.org',
-            ]
-        elif query.startswith("+") or query.replace(" ", "").isdigit():
-            dorks += [
-                f'"{query}" site:pastebin.com',
-                f'"{query}" filetype:pdf',
-                f'"{query}" site:whocallsme.com',
-                f'"{query}" intitle:index.of',
-                f'"{query}" ext:log OR ext:txt',
-            ]
-        elif "." in query:
-            dorks += [
-                f'site:{query} ext:log',
-                f'site:{query} ext:txt',
-                f'"@{query}"',
-                f'"{query}" intitle:index.of',
-                f'"{query}" filetype:csv',
-                f'"{query}" site:archive.org',
-            ]
-        else:
-            dorks += [
-                f'"{query}" site:github.com',
-                f'"{query}" site:reddit.com',
-                f'"{query}" site:twitter.com',
-                f'"{query}" site:medium.com',
-                f'"{query}" inurl:profile',
-                f'"{query}" intitle:profile',
-                f'"{query}" filetype:pdf',
-                f'"{query}" site:pastebin.com',
-                f'"{query}" ext:log OR ext:txt',
-            ]
-        return dorks
+        is_email = bool(re.match(r"^[^@]+@[^@]+\.[^@]+$", q))
+        is_phone = bool(re.fullmatch(r"\+?\d[\d\s().-]{7,}", q))
+        is_domain = bool(re.fullmatch(r"[A-Za-z0-9._-]+\.[A-Za-z]{2,63}", q)) and not is_email
+        is_username = (not is_email and not is_domain and not is_phone)
 
+        def quoted(s): return f"\"{s}\""
+
+        base_sites = [
+            "github.com", "gitlab.com", "bitbucket.org",
+            "pastebin.com", "rentry.co", "ghostbin.com", "gist.github.com",
+            "reddit.com", "twitter.com", "x.com", "stackexchange.com", "stackoverflow.com",
+            "linkedin.com/in", "facebook.com", "about.me", "keybase.io",
+            "archive.org", "web.archive.org",
+            "pypi.org", "npmjs.com", "crates.io",
+        ]
+
+        if is_email:
+            user = q.split("@")[0]
+            domain = q.split("@")[1]
+            dorks += [f'{quoted(q)} site:{s}' for s in base_sites]
+            dorks += [f'{quoted(q)} filetype:pdf', f'{quoted(q)} ext:txt OR ext:log', f'{quoted(q)} inurl:profile']
+            dorks += [f'{quoted(user)} site:{s}', f'"@{domain}"', f'site:{domain} ext:log', f'site:{domain} ext:txt']
+        elif is_phone:
+            dorks += [f'{quoted(q)} site:{s}' for s in ["pastebin.com", "reddit.com", "twitter.com", "x.com"]]
+            dorks += [f'{quoted(q)} ext:txt OR ext:log', f'{quoted(q)} inurl:profile']
+        elif is_domain:
+            dorks += [
+                f'site:{q} ext:log', f'site:{q} ext:txt', f'site:{q} filetype:csv',
+                f'"@{q}"', f'"{q}" intitle:index.of', f'"{q}" "password"',
+                f'"{q}" "api_key" OR "token"'
+            ]
+            dorks += [f'"{q}" site:{s}' for s in ["archive.org", "web.archive.org", "github.com", "gitlab.com"]]
+        else:  # username / general keyword
+            dorks += [f'{quoted(q)} site:{s}' for s in base_sites]
+            dorks += [f'{quoted(q)} inurl:profile', f'{quoted(q)} intitle:profile', f'{quoted(q)} filetype:pdf']
+            dorks += [f'{quoted(q)} ext:txt OR ext:log']
+
+        # de-dup while preserving order
+        seen, out = set(), []
+        for d in dorks:
+            if d not in seen:
+                seen.add(d)
+                out.append(d)
+        return out
+
+    # Result parser (more tolerant)
     def parse_ddg_lite_results(self, soup):
         results = []
-        for a in soup.find_all("a", href=True):
-            href = a["href"].strip()
-            text = a.get_text(strip=True)
-            if href.startswith("http") and "google.com" not in href.lower():
-                results.append((text or "[no snippet]", href))
-        return results if results else "no_results"
+        # try several selectors; DDG HTML changes occasionally
+        candidates = soup.select(".result, .results_links, .results_links_deeplinks, .web-result")
+        for item in candidates:
+            a = item.select_one(".result__a") or item.select_one("a[href]")
+            if not a:
+                continue
+            href = (a.get("href") or "").strip()
+            title = a.get_text(strip=True) or "[no title]"
+            if not href.startswith("http"):
+                continue
+            if "google.com" in href.lower():
+                continue
+            snip_el = item.select_one(".result__snippet, .result__snippet.js-result-snippet")
+            snip = snip_el.get_text(strip=True) if snip_el else ""
+            results.append((title, href, snip))
+        return results or "no_results"
 
+    # Tor-aware DDG search with clearnet fallback
     def onion_ddg_search(self, query, max_results=10, use_tor=True):
         session = requests.Session()
-        if use_tor:
-            session.proxies = self.TOR_PROXY
-        headers = {"User-Agent": "Mozilla/5.0"}
 
-        endpoints = [self.DUCKDUCKGO_LITE, self.DUCKDUCKGO_HTML]
-        random.shuffle(endpoints)
-        for endpoint in endpoints:
-            try:
-                if endpoint.endswith("/html"):
-                    res = session.post(endpoint, headers=headers, data={"q": query}, timeout=10)
-                else:
-                    res = session.get(f"{endpoint}?q={quote_plus(query)}", headers=headers, timeout=10)
-                soup = BeautifulSoup(res.text, "html.parser")
-                results = self.parse_ddg_lite_results(soup)
-                if results and results != "no_results":
-                    return results[:max_results]
-            except Exception:
-                continue
-        return []
+        # Try env override TOR_SOCKS, else auto-detect Tor on common ports
+        tor_proxy = os.environ.get("TOR_SOCKS")
+        if not tor_proxy:
+            for port in (9052, 9050):
+                tor_proxy = f"socks5h://127.0.0.1:{port}"
+                break
 
+        headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"}
+
+        onion_endpoints = [self.DUCKDUCKGO_LITE, self.DUCKDUCKGO_HTML]
+        clearnet_endpoints = ["https://duckduckgo.com/html/", "https://html.duckduckgo.com/html/"]
+
+        def try_endpoints(endpoints, use_proxy=False):
+            if use_proxy and tor_proxy:
+                session.proxies = {"http": tor_proxy, "https": tor_proxy}
+            else:
+                session.proxies = {}
+            random.shuffle(endpoints)
+            for endpoint in endpoints:
+                try:
+                    if endpoint.rstrip("/").endswith("html"):
+                        res = session.post(endpoint, headers=headers, data={"q": query}, timeout=15)
+                    else:
+                        res = session.get(f"{endpoint}?q={quote_plus(query)}", headers=headers, timeout=15)
+                    soup = BeautifulSoup(res.text, "html.parser")
+                    parsed = self.parse_ddg_lite_results(soup)
+                    if parsed and parsed != "no_results":
+                        return parsed[:max_results]
+                    # fallback regex scrape if markup changed
+                    urls = re.findall(r'href="(https?://[^"]+)"', res.text)
+                    if urls:
+                        return [("[no title]", u, "") for u in urls[:max_results]]
+                except Exception:
+                    continue
+            return []
+
+        # Prefer onion via Tor; then clearnet
+        hits = try_endpoints(onion_endpoints, use_proxy=use_tor)
+        if not hits:
+            hits = try_endpoints(clearnet_endpoints, use_proxy=False)
+        return hits or []
+
+    # Parallel dork runner (kept for completeness)
     def run_dork_searches(self, dorks: list, max_results=10):
         results = {}
         failed_dorks = []
         seen_urls = set()
 
-        category_colors = {
-            "github.com": "green",
-            "reddit.com": "red",
-            "twitter.com": "blue",
-            "medium.com": "magenta",
-            "pastebin.com": "yellow",
-            "linkedin.com": "bright_cyan",
-            "facebook.com": "bright_blue",
-            "inurl:profile": "cyan",
-            "intitle:profile": "bright_magenta",
-            "filetype:pdf": "bright_yellow",
-            "ext:log": "bright_red",
-            "ext:txt": "bright_red",
-        }
-
         def worker(dork):
             try:
                 hits = self.onion_ddg_search(dork, max_results=max_results)
-                urls = [url for _, url in hits if url not in seen_urls] if hits else []
+                urls = []
+                for h in hits or []:
+                    # hits are (title, url, snippet)
+                    if isinstance(h, (list, tuple)) and len(h) >= 2:
+                        url = h[1]
+                    else:
+                        url = str(h)
+                    if url and url not in seen_urls:
+                        urls.append(url)
                 return dork, urls
             except Exception:
                 return dork, []
@@ -367,13 +657,13 @@ class DarkelfUtils:
                 if urls:
                     for url in urls:
                         seen_urls.add(url)
-                    color = next((v for k, v in category_colors.items() if k in dork), "white")
                     results[dork] = urls[:max_results]
                 else:
                     failed_dorks.append(dork)
 
         return results
 
+    # Fetchers
     def fetch_url(self, url, use_tor=True, timeout=15):
         session = requests.Session()
         if use_tor:
@@ -407,12 +697,12 @@ class DarkelfUtils:
         with open(output_path, "w") as outfile:
             json.dump(existing, outfile, indent=4)
 
+    # Main scan (stores urls + domains; AI summary/analysis included)
     def osintscan(self, query, use_tor=True, max_results=10):
-        import re
+        # -------- classify the query --------
         is_email = bool(re.match(r"^[^@]+@[^@]+\.[^@]+$", query))
         is_username = bool(re.match(r"^@?[a-zA-Z0-9_.-]{3,32}$", query)) and not is_email
         is_name = False
-
         if not (is_email or is_username):
             parts = query.strip().split()
             if len(parts) >= 2 and all(re.match(r"^[A-Za-z.\-']+$", p) for p in parts):
@@ -426,12 +716,15 @@ class DarkelfUtils:
             "emails": [],
             "profiles": [],
             "mentions": [],
-            "summary": []
+            "summary": [],
+            "ai_summary": "",
+            "ai_analysis": "",
         }
 
         tlds = ["com", "net", "org", "gov", "edu", "int", "info", "eu", "ch", "de", "fr", "it", "nl", "ru", "pl", "us", "uk", "au", "ca", "in", "biz", "pro", "co", "me"]
         special_sites = ["archive.org", "pastebin.com", "manchestercf.com", "egs.edu", "researchgate.net", "academia.edu", "ssrn.com", "osf.io", "darkelfbrowser.com"]
 
+        # -------- build dorks --------
         if is_email:
             username_part = email.split("@")[0]
             dorks_email = [f'"{email}" site:{site}' for site in special_sites]
@@ -469,38 +762,98 @@ class DarkelfUtils:
         else:
             dorks = [f'"{query}"']
 
+        # de-dup dorks, preserve order
+        dorks = list(dict.fromkeys(dorks))
+
+        # -------- run searches and collect hits --------
         seen = set()
         urls = []
-
+        rich_hits = []  # list[(title, url, snippet)]
         for dork in dorks:
-            hits = self.onion_ddg_search(dork, max_results=max_results)
+            hits = self.onion_ddg_search(dork, max_results=max_results, use_tor=use_tor)
             for item in hits:
-                url = item[1] if isinstance(item, (list, tuple)) and len(item) == 2 else str(item)
+                title = item[0] if isinstance(item, (list, tuple)) and len(item) >= 1 else "[no title]"
+                url = item[1] if isinstance(item, (list, tuple)) and len(item) >= 2 else str(item)
+                snippet = item[2] if isinstance(item, (list, tuple)) and len(item) >= 3 else ""
                 if url.startswith("http") and url not in seen:
                     urls.append(url)
+                    rich_hits.append((title, url, snippet))
                     seen.add(url)
             if len(urls) >= max_results:
                 break
 
+        # store urls + domains for UI and downstream logic
+        results["urls"] = urls
+        results["unique_domains"] = sorted({u.split("/")[2] for u in urls if "://" in u})
+
+        # legacy fields some parts of the app still read
         results["profiles"].extend(urls)
         results["mentions"].extend(list(seen))
 
-        summary = []
-        summary.append("=== OSINT Summary ===")
-        if email:
-            summary.append(f"[📧] Email scanned: {email}")
-        if username:
-            summary.append(f"[🧑] Username scanned: {username}")
-        if name:
-            summary.append(f"[👤] Name scanned: {name}")
-        if urls:
-            summary.append(f"[🌐] Dorked URLs: {len(urls)}")
-            for u in urls[:max_results]:
-                summary.append(f"  - {u}")
+        # -------- AI: feed memory & request summary/analysis (if available) --------
+        ai_ok = hasattr(self, "ai") and self.ai is not None
+        if urls and ai_ok:
+            # give AI the recent hits + indicators
+            self.ai.last_osint_results = rich_hits
+            for title, href, snippet in rich_hits:
+                self.ai.ingest_text(f"{query} {title} {href} {snippet}")
+
+            q_summary = (
+                f"Summarize the OSINT findings for '{query}'. "
+                f"Highlight key indicators (emails, usernames, domains, IPs, phones, hashes) and "
+                f"give crisp next steps."
+            )
+            q_analysis = (
+                f"Analyze potential risks, connections, and anomalies for '{query}'. "
+                f"Note credibility of sources and what to pivot on next."
+            )
+
+            try:
+                results["ai_summary"] = (self.ai.respond(q_summary) or "").strip()
+            except Exception as e:
+                results["ai_summary"] = f"(AI summary unavailable: {e})"
+
+            try:
+                results["ai_analysis"] = (self.ai.respond(q_analysis) or "").strip()
+            except Exception as e:
+                results["ai_analysis"] = f"(AI analysis unavailable: {e})"
         else:
-            summary.append("[!] No URLs found.")
-        summary.append("✅ OSINT scan complete.")
-        results["summary"] = summary
+            if not urls:
+                results["ai_summary"] = "No URLs found to summarize."
+                results["ai_analysis"] = "No evidence to analyze."
+            elif not ai_ok:
+                results["ai_summary"] = "AI not initialized in DarkelfUtils."
+                results["ai_analysis"] = "AI not initialized in DarkelfUtils."
+
+        # -------- human-readable summary (plus AI text appended) --------
+        summary_lines = []
+        summary_lines.append("=== OSINT Summary ===")
+        if email:
+            summary_lines.append(f"[📧] Email scanned: {email}")
+        if username:
+            summary_lines.append(f"[🧑] Username scanned: {username}")
+        if name:
+            summary_lines.append(f"[👤] Name scanned: {name}")
+        if urls:
+            summary_lines.append(f"[🌐] URLs found: {len(urls)} from {len(results['unique_domains'])} unique domains")
+            for u in urls[:max_results]:
+                summary_lines.append(f"  - {u}")
+        else:
+            summary_lines.append("[!] No URLs found.")
+        summary_lines.append("")
+
+        # Append AI sections so they show up in your QTextEdit output
+        if results["ai_summary"]:
+            summary_lines.append("[Darkelf AI Summary]")
+            summary_lines.append(results["ai_summary"])
+            summary_lines.append("")
+        if results["ai_analysis"]:
+            summary_lines.append("[Darkelf AI Analysis]")
+            summary_lines.append(results["ai_analysis"])
+            summary_lines.append("")
+
+        summary_lines.append("✅ OSINT scan complete.")
+        results["summary"] = summary_lines
 
         return results
 
@@ -4120,8 +4473,8 @@ class Darkelf(QMainWindow):
                 return
 
             bridges = [
-                "obfs4 185.177.207.158:8443 B9E39FA01A5C72F0774A840F91BC72C2860954E5 cert=WA1P+AQj7sAZV9terWaYV6ZmhBUcj89Ev8ropu/IED4OAtqFm7AdPHB168BPoW3RrN0NfA iat-mode=0",
-                "obfs4 91.227.77.152:465 42C5E354B0B9028667CFAB9705298F8C3623A4FB cert=JKS4que9Waw8PyJ0YRmx3QrSxv/YauS7HfxzmR51rCJ/M9jCKscJu7SOuz//dmzGJiMXdw iat-mode=2"
+                "obfs4 119.28.85.51:30002 68C976026FFF43CF5D187D8594930079BB6FA2F5 cert=w7Aozdz29YcoyIyUKSxXEt8xMlXYeiZrW6G85gNa03RWS4ImctORxZfmaP0IKcDfrFSgew iat-mode=0",
+                "obfs4 87.121.52.247:9216 8C51BB761FF9D89B09A3670892E84019D60D7210 cert=xCIrRXBuV44z3u8QzTFCL5zTqFYe7sTADQ4oHqs91YIbC7kap3WV6TzbvezmJKUGYsY7aQ iat-mode=0"
             ]
 
             random.shuffle(bridges)
@@ -4717,28 +5070,116 @@ class Darkelf(QMainWindow):
         run_osint_action = QAction("Run OSINT Scan", self)
         run_osint_action.triggered.connect(self.launch_osint_scanner)  # ✅ must match your actual method name
         osint_menu.addAction(run_osint_action)
+        
+    def _apply_osint_styles(self, root_widget):
+        """
+        Space-grey card + pill buttons styling for OSINT scanner UI.
+        """
+        root_widget.setStyleSheet("""
+            QWidget#OsintCard {
+                background: #1b1f24;
+                border: 1px solid #2a2f36;
+                border-radius: 16px;
+            }
+            QWidget {
+                color: #E6EDF3;
+                font-size: 14px;
+            }
+            QLineEdit {
+                background: #0e1116;
+                border: 1px solid #2a2f36;
+                border-radius: 12px;
+                padding: 10px 12px;
+                color: #E6EDF3;
+                selection-background-color: #2d333b;
+            }
+            QTextEdit {
+                background: #0e1116;
+                border: 1px solid #2a2f36;
+                border-radius: 12px;
+                padding: 10px;
+                color: #DCE3EA;
+            }
+            QPushButton {
+                background: #0f141a;
+                border: 1px solid #2a2f36;
+                border-radius: 9999px;
+                padding: 10px 16px;
+                font-weight: 600;
+                color: #E6EDF3;
+            }
+            QPushButton:hover {
+                background: #161b22;
+                border-color: #3a4150;
+            }
+            QPushButton:pressed {
+                background: #0c1015;
+            }
+            QPushButton[variant="primary"] {
+                border-color: #3fb950;
+            }
+            QPushButton[variant="primary"]:hover {
+                background: #122018;
+                border-color: #56d364;
+            }
+        """)
 
     def launch_osint_scanner(self):
         self.osint_window = QWidget()
         self.osint_window.setWindowTitle("Darkelf OSINT Scanner")
-        self.osint_window.setGeometry(300, 200, 600, 500)
+        self.osint_window.setGeometry(300, 200, 680, 560)
 
-        layout = QVBoxLayout()
+        # Outer padding so the card floats
+        outer = QVBoxLayout(self.osint_window)
+        outer.setContentsMargins(16, 16, 16, 16)
+
+        # Card wrapper
+        card = QFrame(self.osint_window)
+        card.setObjectName("OsintCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setSpacing(12)
+        card_layout.setContentsMargins(16, 16, 16, 16)
+
+        # Controls
+        self.summarize_button = QPushButton("Summarize with Darkelf AI")
+        self.summarize_button.setProperty("class", "primary")
+        self.summarize_button.setObjectName("summarize")
 
         self.query_input = QLineEdit()
         self.query_input.setPlaceholderText("Enter email, username, phone, or .onion")
 
+        # Action row with pill buttons
+        row = QHBoxLayout()
         self.scan_button = QPushButton("Run OSINT Scan")
+        self.scan_button.setProperty("class", "primary")
         self.export_button = QPushButton("Export Results")
+        row.addWidget(self.scan_button)
+        row.addWidget(self.export_button)
+
         self.output_box = QTextEdit()
         self.output_box.setReadOnly(True)
+        self.output_box.setMinimumHeight(320)
 
-        layout.addWidget(self.query_input)
-        layout.addWidget(self.scan_button)
-        layout.addWidget(self.export_button)
-        layout.addWidget(self.output_box)
+        # Assemble
+        card_layout.addWidget(self.summarize_button)
+        card_layout.addWidget(self.query_input)
+        card_layout.addLayout(row)
+        card_layout.addWidget(self.output_box)
 
-        self.osint_window.setLayout(layout)
+        outer.addWidget(card)
+
+        # Shadow so it looks like a real “box”
+        eff = QGraphicsDropShadowEffect(self.osint_window)
+        eff.setBlurRadius(28)
+        eff.setOffset(0, 8)
+        eff.setColor(QColor(0, 0, 0, 110))
+        card.setGraphicsEffect(eff)
+
+        # Apply theme
+        self._apply_osint_styles(self.osint_window)
+
+        # Wire up actions
+        self.summarize_button.clicked.connect(self._summarize_with_darkelf_ai)
         self.scan_button.clicked.connect(self.run_osint_query)
         self.export_button.clicked.connect(self.export_results)
 
@@ -4793,13 +5234,18 @@ class Darkelf(QMainWindow):
                 QMessageBox.critical(self.osint_window, "Export Failed", f"Error: {e}")
 
     def display_osint_result(self, result):
+        self.output_box.clear()
         if "error" in result:
             self.output_box.append(f"[ERROR] Scan failed: {result['error']}")
             return
 
-        self.output_box.append("[✅] Scan complete.\n")
-        for line in result.get("summary", []):
-            self.output_box.append(str(line))
+        try:
+            html = self._render_osint_html(result)
+            self.output_box.setHtml(html)
+        except Exception as e:
+            self.output_box.append(f"[INFO] Could not render HTML: {e}")
+            for line in result.get("summary", []):
+                self.output_box.append(str(line))
 
     def add_recon_actions(self, recon_menu):
         urls = [
@@ -4822,6 +5268,36 @@ class Darkelf(QMainWindow):
             action.triggered.connect(lambda checked, u=url: self.open_url(u))
             recon_menu.addAction(action)
             
+    def _summarize_with_darkelf_ai(self):
+        if not self.last_result:
+            QMessageBox.information(self.osint_window, "No Results", "Run a scan first.")
+            return
+        try:
+            # Simple fallback summarizer
+            summary = self._basic_summary(self.last_result)
+            self.output_box.append("\n[Darkelf AI Summary]\n" + summary)
+        except Exception as e:
+            QMessageBox.warning(self.osint_window, "Summary Failed", str(e))
+
+    def _basic_summary(self, result):
+        urls = result.get("urls", [])
+        return f"Found {len(urls)} URLs from {len(set(u.split('/')[2] for u in urls if '://' in u))} unique domains."
+
+    def _render_osint_html(self, result):
+        urls = result.get("urls", [])
+        html_lines = [
+            "<h3>OSINT Scan Results</h3>",
+            "<ul>"
+        ]
+        for u in urls:
+            html_lines.append(f'<li><a href="{u}" style="color:#00ff99;">{self._html_escape(u)}</a></li>')
+        html_lines.append("</ul>")
+        return "\n".join(html_lines)
+
+    def _html_escape(self, text):
+        import html
+        return html.escape(text)
+
     def add_tools_actions(self, tools_menu):
 
         urls = [
@@ -5294,6 +5770,34 @@ class HistoryDialog(QDialog):
         
         self.setLayout(layout)
 
+        # === Dark theme styling to match context menu ===
+        self.setStyleSheet("""
+            QDialog {
+                background: #0b0f14;
+                border-radius: 14px;
+            }
+            QListWidget {
+                background: #11161d;
+                color: #e6f0f7;
+                border: 1px solid #1f2937;
+                border-radius: 10px;
+                selection-background-color: #18f77a;
+                selection-color: #11161d;
+            }
+            QPushButton {
+                background: #18f77a;
+                color: #0b0f14;
+                border: none;
+                border-radius: 10px;
+                padding: 10px 0;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: #0ed967;
+                color: #fff;
+            }
+        """)
+        
 def start_tls_monitor():
     monitored_sites = [
         "check.torproject.org",
@@ -5385,6 +5889,7 @@ def main():
     # Create the application only ONCE
     app = QApplication.instance() or QApplication(sys.argv)
     apply_darkelf_menu_theme()
+    apply_darkelf_qss()
 
     # Start the kernel monitor
     monitor = DarkelfKernelMonitor(parent_app=app)
@@ -5405,3 +5910,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+
