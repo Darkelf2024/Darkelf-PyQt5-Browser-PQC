@@ -3788,8 +3788,8 @@ class Darkelf(QMainWindow):
                 return
 
             bridges = [
-                "obfs4 185.177.207.158:8443 B9E39FA01A5C72F0774A840F91BC72C2860954E5 cert=WA1P+AQj7sAZV9terWaYV6ZmhBUcj89Ev8ropu/IED4OAtqFm7AdPHB168BPoW3RrN0NfA iat-mode=0",
-                "obfs4 91.227.77.152:465 42C5E354B0B9028667CFAB9705298F8C3623A4FB cert=JKS4que9Waw8PyJ0YRmx3QrSxv/YauS7HfxzmR51rCJ/M9jCKscJu7SOuz//dmzGJiMXdw iat-mode=2"
+                "obfs4 119.28.85.51:30002 68C976026FFF43CF5D187D8594930079BB6FA2F5 cert=w7Aozdz29YcoyIyUKSxXEt8xMlXYeiZrW6G85gNa03RWS4ImctORxZfmaP0IKcDfrFSgew iat-mode=0",
+                "obfs4 87.121.52.247:9216 8C51BB761FF9D89B09A3670892E84019D60D7210 cert=xCIrRXBuV44z3u8QzTFCL5zTqFYe7sTADQ4oHqs91YIbC7kap3WV6TzbvezmJKUGYsY7aQ iat-mode=0"
             ]
 
             random.shuffle(bridges)
@@ -4791,6 +4791,34 @@ class HistoryDialog(QDialog):
         layout.addWidget(close_button)
         
         self.setLayout(layout)
+
+        # === Dark theme styling to match context menu ===
+        self.setStyleSheet("""
+            QDialog {
+                background: #0b0f14;
+                border-radius: 14px;
+            }
+            QListWidget {
+                background: #11161d;
+                color: #e6f0f7;
+                border: 1px solid #1f2937;
+                border-radius: 10px;
+                selection-background-color: #18f77a;
+                selection-color: #11161d;
+            }
+            QPushButton {
+                background: #18f77a;
+                color: #0b0f14;
+                border: none;
+                border-radius: 10px;
+                padding: 10px 0;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: #0ed967;
+                color: #fff;
+            }
+        """)
         
 def start_tls_monitor():
     monitored_sites = [
@@ -4899,3 +4927,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
