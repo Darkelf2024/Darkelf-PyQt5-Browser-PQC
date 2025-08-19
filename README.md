@@ -121,7 +121,7 @@ bar.setAttribute(Qt.WA_StyledBackground, True)
 
 Darkelf aims to **reduce attack surface** and **limit tracking**, but it is **not a drop‑in replacement for Tor Browser or a dedicated hardened OS**. Features like request blocking/fingerprinting protection are best‑effort and may not defeat determined, targeted tracking.
 
-- PQC features are **experimental** and for **research/demo** use only.
+- PQC features are **experimental** and for **research/educational** use only.
 - Always review the code and compile your own binaries if distributing.
 - See the **export compliance** notice in the source headers.
 
