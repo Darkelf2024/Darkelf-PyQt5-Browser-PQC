@@ -1,19 +1,19 @@
 # Darkelf Browser v3.0 – Secure, Privacy-Focused Web Browser
 # Copyright (C) 2025 Dr. Kevin Moore
 #
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
 # This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Lesser General Public License as published by
+# it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU Lesser General Public License for more details.
+# GNU General Public License for more details.
 #
-# You should have received a copy of the GNU Lesser General Public License
+# You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 # EXPORT COMPLIANCE NOTICE:
@@ -49,8 +49,9 @@
 # By downloading, using, or distributing this software, you agree to comply with
 # all applicable U.S. export control laws and regulations.
 #
-# This software is published under the LGPL v3.0 license and was authored by
+# This software is published under the GPL v3.0 license and was authored by
 # Dr. Kevin Moore in 2025.
+
 
 import sys
 import random
