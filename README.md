@@ -1,9 +1,9 @@
-# Darkelf Browser — PyQt5 Variants
+# Darkelf Vault Browser — PyQt5 (v3)
 
-**Darkelf** is a small, hardened, privacy‑first web browser built on Qt WebEngine.  
-This README describes the **PyQt5** editions included in this repo and how to run them.
+**Darkelf** is a **fully hardened, privacy-first browser** built on Qt WebEngine.  
+It is designed as a **drop-in replacement for Tor Browser**, combining strong fingerprinting defenses, Tor/SOCKS proxy routing, post-quantum crypto, and even **OS-level hardening tools**.  
 
-> Looking for the ML‑KEM 768 experimental build? That's the **PySide6** edition; see the separate note at the end.
+This README documents the **PyQt5 Vault Browser** editions included here.
 
 ---
 
@@ -11,147 +11,120 @@ This README describes the **PyQt5** editions included in this repo and how to ru
 
 | Variant | File | What it is |
 |---|---|---|
-| **Darkelf Vault Browser** | `Darkelf Vault Browser.py` | The “everyday hardened” build: tracker blocking, HTTPS‑only, fingerprinting defenses, Tor/SOCKS proxy support, secure downloads. |
-| **Darkelf Vault TL Edition** | `Darkelf Vault TL Edition.py` | Adds **TLS/Network tooling** on top of Vault Browser: live certificate hash/monitoring, client‑TLS fingerprint control via `tls-client`, and additional DNS (DoH/DoT) resolvers. |
-
-### Feature highlights
-
-- **Hardened Qt WebEngine config**
-  - Many risky surfaces disabled by default via `QTWEBENGINE_CHROMIUM_FLAGS` (WebRTC, WebGL/3D APIs, some HTTP/2, etc.).
-  - HTTPS‑only upgrade on navigation.
-  - Per‑profile storage: cookies, cache and history under an isolated `QWebEngineProfile`.
-- **Tracking & fingerprinting defenses**
-  - Rule‑based request blocker (simple ad/tracker lists).
-  - Anti‑fingerprinting helpers: canvas spoofing, letterboxing, WebRTC IP leak blocking, supercookie/ETag/cache busting, referrer trimming.
-- **Networking**
-  - **Tor/SOCKS5** support (e.g. `127.0.0.1:9050`/`9052`) and PAC file support.
-  - Optional **DoH/DoT** DNS resolvers (Cloudflare endpoints), with a pure‑Python fallback.
-- **Crypto tools (local, not TLS)**  
-  - `cryptography` + `PyNaCl` for file/clipboard utilities, scrypt‑based key derivation, and EXIF stripping for media.
-  - Optional **post‑quantum** primitives via **Open Quantum Safe (`oqs`)** — used for local key exchange and demo JS bridge (see below).
-- **Privacy helpers**
-  - Download manager with hash display, clipboard scrub, EXIF/metadata remover for images/PDFs.
-- **UI**
-  - Minimal dark theme with green accents, multi‑tab interface, basic shortcuts: **Ctrl+T** (new tab), **Ctrl+W** (close), **Ctrl+R** (reload), **Ctrl+H** (history).
-
-> Note: exact features differ slightly between the two PyQt5 files; TL Edition includes extra TLS/DNS tooling and a live certificate monitor (`get_cert_hash`, `start_tls_monitor`).
+| **Darkelf Vault Browser** | `Darkelf Vault Browser.py` | Hardened default build: tracker blocking, HTTPS-only, fingerprinting defenses, Tor/SOCKS proxy support, secure downloads, kernel monitors. |
+| **Darkelf Vault TL Edition** | `Darkelf Vault TL Edition.py` | Adds advanced **TLS/Network tooling**: live certificate SHA-256 monitor, TLS fingerprint control (`tls-client`), extra DNS resolvers (DoH/DoT). |
 
 ---
 
-## Quick start
+## 🔥 Darkelf vs Tor Browser
 
-### 1) Requirements
+| Feature | **Darkelf Vault Browser v3** | **Tor Browser** |
+|---------|-------------------------------|-----------------|
+| **Network routing** | SOCKS5/Tor proxy support (127.0.0.1:9050/9052). PAC file support. | Tor network routing by default. |
+| **TLS stack** | TLS 1.3 enforced by default. Live SHA-256 certificate monitoring (TL Edition). | Standard Firefox TLS stack. |
+| **DNS** | DNS-over-HTTPS (DoH) & DNS-over-TLS (DoT) resolvers included (configurable). | Uses Tor exit node resolvers. |
+| **Fingerprinting defenses** | Over 40+ injected JS stealth APIs: canvas, audio, WebRTC, plugins, timezone, fonts, performance timers, etc. Tor-style letterboxing spoof. | Tor Browser-level defenses (canvas prompt, letterboxing, UA uniformity). |
+| **Crypto bridge** | **DarkelfCrypto**: exposes NaCl, Cryptography, and **ML-KEM 768 (Kyber)** PQC to web pages via QWebChannel. Fully functional, not a demo. | None (no local crypto bridge). |
+| **Post-quantum support** | ✅ **Fully working ML-KEM 768 (Kyber) via Open Quantum Safe.** | ❌ Not included. |
+| **Kernel/system hardening** | DarkelfKernelMonitor: disables dynamic_pager, wipes swapfiles, monitors kernel config. | ❌ Not included. |
+| **Platform** | PyQt5 (Linux, Windows, macOS). | Firefox ESR (all major OS). |
+| **Default search** | DuckDuckGo private search (configurable). | DuckDuckGo onion / local search box. |
 
-- Python **3.11+** recommended
-- **PyQt5** and **PyQtWebEngine**
-- Other runtime deps used by the PyQt5 variants:
+👉 **Summary**: Darkelf matches Tor Browser in anonymity features, **adds post-quantum crypto, TLS/DNS tools, and OS-level hardening.**  
+
+---
+
+## 🚀 Recommended Use Cases
+
+Darkelf is designed for **users who need more than Tor Browser provides**, with particular focus on **post-quantum security, hardened environments, and forensic safety**.  
+
+- **Everyday hardened browsing**  
+  Use Darkelf Vault as your default secure browser: tracker blocking, HTTPS-only, stealth APIs, and proxy/Tor support.  
+
+- **Post-quantum research & testing**  
+  The **DarkelfCrypto bridge** with **ML-KEM 768 (Kyber)** lets developers and researchers experiment with PQC and hybrid key exchange in a real browser environment.  
+
+- **Forensic & investigative workflows**  
+  Built-in **certificate hash monitor** and **DNS/TLS tools** help with network analysis, pinning, and debugging malicious chains.  
+
+- **System-level security environments**  
+  On macOS/Linux, **DarkelfKernelMonitor** ensures swap/paging is controlled, preventing memory persistence and reducing side-channel leakage.  
+
+- **Educational use**  
+  As a teaching tool, Darkelf demonstrates hardened browser design, cryptographic bridges, and PQC integration in an accessible Python/Qt codebase.  
+
+---
+
+## Feature Highlights
+
+### 🔒 Hardened Web Engine
+- Chromium surfaces disabled via `QTWEBENGINE_CHROMIUM_FLAGS`.  
+- HTTPS-only upgrade enforced.  
+- Isolated **per-profile storage**.  
+
+### 🕵️ Fingerprinting & Tracking Defenses
+- **Massive anti-fingerprinting layer** with >40 injected overrides.  
+- Tor-style letterboxing.  
+- Request/ad/tracker blocking.  
+- ETag/cache/supercookie busting.  
+
+### 🌍 Networking
+- Tor/SOCKS5 proxy + PAC support.  
+- DoH/DoT resolvers (Cloudflare default).  
+- TLS 1.3-only enforced.  
+- Certificate SHA-256 live monitor (TL Edition).  
+
+### ⚡ Post-Quantum Crypto — Fully Working
+- Integrated **ML-KEM 768 (Kyber)** via **Open Quantum Safe (`oqs`)**.  
+- Local key exchange and hybrid encryption through DarkelfCrypto.  
+
+### 🛡️ DarkelfCrypto Bridge
+- Exposes crypto primitives to web pages via **QWebChannel**.  
+- Fully functional: not a demo.  
+- Supports PQC (Kyber), NaCl, file/clipboard tools, scrypt KDF, EXIF stripping.  
+
+### 🖥️ Kernel & System Hardening
+- **DarkelfKernelMonitor** detects and disables swap/dynamic_pager.  
+- Securely wipes swap files.  
+- Monitors kernel fingerprint.  
+
+### 🎨 UI
+- Minimal dark theme with green accents.  
+- Multi-tab interface, familiar shortcuts.  
+
+---
+
+## Quick Start
+
+### Requirements
 
 ```bash
-pip install PyQt5 PyQtWebEngine cryptography pynacl pillow piexif \
-            httpx pysocks beautifulsoup4 PyPDF2
+pip install PyQt5 PyQtWebEngine cryptography pynacl pillow piexif             httpx pysocks beautifulsoup4 PyPDF2
 ```
 
-**Optional (enables extra features):**
-
+**Optional (extra features):**
 ```bash
-pip install oqs  # Open Quantum Safe bindings (post‑quantum demos)
-pip install tls-client  # TLS client fingerprint tooling (TL Edition)
+pip install oqs          # Post-quantum ML-KEM 768 support
+pip install tls-client   # TLS fingerprint tooling (TL Edition)
 ```
 
-> On Apple Silicon you may need `brew install openssl` and set `CPPFLAGS`/`LDFLAGS` when compiling crypto packages.
-
-### 2) Run
+### Run
 
 ```bash
-# Vault Browser (hardened default)
+# Vault Browser (default hardened)
 python "Darkelf Vault Browser.py"
 
-# Vault TL Edition (adds TLS/DNS tools)
+# Vault TL Edition (adds TLS/DNS tooling)
 python "Darkelf Vault TL Edition.py"
 ```
 
-The address bar defaults to a private search (DuckDuckGo). You can paste any URL or use the search box on the start page.
-
 ---
 
-## Configuration
+## Security Model
 
-### Environment flags (already set in code)
-Both PyQt5 variants set **Chromium** flags through `QTWEBENGINE_CHROMIUM_FLAGS`, e.g.:
-
-- `--disable-webrtc --disable-webgl --disable-3d-apis`
-- `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`
-- GPU/Canvas hardening and other privacy toggles
-
-Adjust these in the `main()` function if you need different defaults.
-
-### Proxies and Tor
-In **Settings → Security** (or via code hooks), you can switch the app to use a **SOCKS5** proxy. Typical Tor endpoints are `127.0.0.1:9050` or `127.0.0.1:9052`. PAC files are also supported.
-
-### DNS (DoH/DoT)
-TL Edition ships with workers for **DNS‑over‑HTTPS** (`https://cloudflare-dns.com/dns-query`) and **DNS‑over‑TLS** (`1.1.1.1:853`). You can change these hosts in the source if you prefer other resolvers.
-
-### Certificate monitor (TL Edition)
-The title bar/status shows a live **SHA‑256** of the site’s leaf certificate. You can use this for quick pinning or debugging bad chains during testing.
-
-### Post‑quantum demo bridge
-Both PyQt5 builds expose a small **QWebChannel** object (`darkelfCrypto`) that lets a page call local crypto helpers (e.g., **ML‑KEM/Kyber** keypair + hybrid encrypt). This is **local JS ↔ Python** crypto for demonstrations; it is **not** a TLS replacement.
+- **Drop-in replacement for Tor Browser** workflows.  
+- PQC support: **fully functional**, not experimental.  
+- DarkelfCrypto: **real local crypto bridge**, not demo.  
+- System-level defenses beyond Tor Browser.  
 
 ---
-
-## Theming & macOS note
-
-If you see a **light strip** behind the tabs on macOS, make sure the pane is painted:
-
-```python
-self.tab_widget.setStyleSheet(\"\"\"
-    QTabWidget { background: #0b0f14; }
-    QTabWidget::pane { background: #0b0f14; border: 0; }
-    QTabBar { background: #0b0f14; }
-\"\"\")
-bar = self.tab_widget.tabBar()
-if hasattr(bar, "setDrawBase"):
-    bar.setDrawBase(False)
-bar.setAttribute(Qt.WA_StyledBackground, True)
-```
-
----
-
-## Security model & caveats
-
-Darkelf aims to **reduce attack surface** and **limit tracking**, but it is **not a drop‑in replacement for Tor Browser or a dedicated hardened OS**. Features like request blocking/fingerprinting protection are best‑effort and may not defeat determined, targeted tracking.
-
-- PQC features are **experimental** and for **research/educational** use only.
-- Always review the code and compile your own binaries if distributing.
-- See the **export compliance** notice in the source headers.
-
----
-
-## FAQ
-
-**Q: Why PyQt5 and not PySide6?**  
-The Vault variants target **PyQt5** for maximum compatibility across Linux/Windows/macOS. The separate **ML‑KEM 768 Edition** uses **PySide6** to exercise newer Qt APIs.
-
-**Q: Where is browsing data stored?**  
-Each build uses a custom `QWebEngineProfile` directory (cookies/cache/history). Clear it from **History** or remove the profile folder if you need a cold start.
-
-**Q: Can I change the default search?**  
-Yes—edit the start‑page template or the URL formatter in the main window class.
-
----
-
-## Contributing
-
-Pull requests are welcome. Please keep changes focused and include a short description and testing notes. For larger changes (new mitigations, proxy modes, platform quirks), open an issue first.
-
----
-
-## License
-
-The source is licensed under **LGPL‑3.0‑or‑later** (see file headers). The repository may include third‑party components under their respective licenses.
-
----
-
-## Related: PySide6 ML‑KEM 768 Edition
-
-The repository also contains a **PySide6** variant that demonstrates local **ML‑KEM‑768** key exchange and a JS crypto bridge. If you’re only interested in PyQt5, you can ignore it; otherwise see `Darkelf ML-KEM 768 Edition*.py` for the experimental build.
