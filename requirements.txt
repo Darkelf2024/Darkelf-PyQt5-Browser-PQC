@@ -8,6 +8,7 @@ pycryptodome==3.23.0
 pqcrypto==0.3.4
 PySocks==1.7.1
 PyQt5==5.15.11
+PyQtWebEngine==5.15.7
 requests==2.32.5
 scikit-learn==1.6.1
 shiboken6==6.9.2
