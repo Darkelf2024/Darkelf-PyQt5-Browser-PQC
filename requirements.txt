@@ -12,7 +12,7 @@ PyQt5==5.15.11
 PyQt5-WebEngine==5.15.7
 requests==2.32.5
 scikit-learn==1.6.1
-shiboken6==6.9.1
+shiboken6==6.9.2
 matplotlib==3.10.3
 pynacl==1.5.0
 psutil==7.0.0
